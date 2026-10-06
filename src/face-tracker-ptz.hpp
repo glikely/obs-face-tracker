@@ -52,8 +52,6 @@ struct face_tracker_ptz
 	char *debug_data_error_last;
 	char *debug_data_control_last;
 
-	char *ptz_type;
-
 	bool is_paused;
 	obs_hotkey_pair_id hotkey_pause;
 	obs_hotkey_id hotkey_reset;

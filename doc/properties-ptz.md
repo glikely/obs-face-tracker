@@ -147,24 +147,21 @@ Set `0` to disable.
 ## Output
 This property group configure how to connect to the PTZ camera.
 
-### PTZ Type
-Specify the protocol to connect to the camera.
-| Type | Description |
-| ---- | ----------- |
-| `None` | Do not connect to camera. Control message will be logged. |
-| `through PTZ Controls` | Send through the PTZ Controls plugin. |
-| `VISCA over TCP` | Send using TCP connection to the camera. |
+### PTZ Device
+Select the camera to control from the PTZ devices of [PTZ Controls](https://github.com/glikely/obs-ptz).
+`None` does not control a camera.
+This needs a version of PTZ Controls whose PTZ device API is version 0.7 or later, which is newer than PTZ Controls 1.0.0-beta2.
+The selected device is remembered by its source, and is found again when it is loaded.
 
-The option `through PTZ Controls` requires the other plugin [PTZ Controls](https://github.com/glikely/obs-ptz).
-The feature could be broken by future release of either plugin.
+Settings saved by older versions, which chose a type such as `through PTZ Controls` or `VISCA over TCP`, are not carried over.
+Select the device again.
+The connection to the camera is now set up in PTZ Controls.
 
-### IP address, port
-The address and port of the camera you are connect to.
-You can specify IP address or host name if your system can resolve it.
-
-### Max control (pan, tilt, zoom)
-These sliders can limit the maximum control amount to the camera.
-If you want to disable changing zoom, set it to `0`.
+### Maximum optical zoom
+The zoom of the camera is reported as a position from 0 to 1.
+The magnification of the lens is needed to slow the control down when zoomed in.
+Set the magnification of the lens at its full zoom.
+The default is `20`.
 
 ### Invert control (pan, tilt, zoom)
 These checkboxes invert the direction of the control.

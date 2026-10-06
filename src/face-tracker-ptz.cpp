@@ -12,55 +12,26 @@
 #include "face-tracker-ptz.hpp"
 #include "face-tracker-preset.h"
 #include "face-tracker-manager.hpp"
-#include "ptz-backend.hpp"
-#include "obsptz-backend.hpp"
-#ifdef WITH_PTZ_TCP
-#include "libvisca-thread.hpp"
-#endif
-#include "dummy-backend.hpp"
+#include "ptz-controller.hpp"
 
 #define PTZ_MAX_X 0x18
 #define PTZ_MAX_Y 0x14
 #define PTZ_MAX_Z 0x07
 
-enum ptz_cmd_state_e {
-	ptz_cmd_state_none = 0,
-	ptz_cmd_state_pantilt,
-	ptz_cmd_state_zoom,
-};
-
 class ft_manager_for_ftptz : public face_tracker_manager {
 public:
 	struct face_tracker_ptz *ctx;
 	std::shared_ptr<texture_object> cvtex_cache;
-	enum ptz_cmd_state_e ptz_last_cmd;
-	class ptz_backend *dev;
+	ptz_controller dev;
 
 public:
 	ft_manager_for_ftptz(struct face_tracker_ptz *ctx_)
 	{
 		ctx = ctx_;
 		cvtex_cache = NULL;
-		dev = NULL;
 	}
 
-	bool can_send_ptz_cmd()
-	{
-		if (dev) {
-			return dev->can_send();
-		}
-		return false;
-	}
-
-	void release_dev()
-	{
-		if (dev) {
-			dev->set_pantilt_speed(0, 0);
-			dev->set_zoom_speed(0);
-			dev->release();
-			dev = NULL;
-		}
-	}
+	void release_dev() { dev.stop(); }
 
 	~ft_manager_for_ftptz() { release_dev(); }
 
@@ -71,111 +42,6 @@ static const char *ftptz_get_name(void *unused)
 {
 	UNUSED_PARAMETER(unused);
 	return obs_module_text("Face Tracker PTZ");
-}
-
-struct ptz_backend_type_s
-{
-	const char *backend_name;
-	class ptz_backend *(*make_device)(obs_data_t *data);
-	bool (*ptz_type_modified)(obs_properties_t *group_output, obs_data_t *settings);
-};
-
-template<class backend_class> static class ptz_backend *make_device_template(obs_data_t *data)
-{
-	if (!backend_class::check_data(data))
-		return nullptr;
-	auto dev = new backend_class();
-	dev->set_config(data);
-	return dev;
-}
-
-static const struct ptz_backend_type_s backends[] = {
-// clang-format off
-#define BACKEND(name, cls)                                   \
-	{                                                    \
-		.backend_name = name,                        \
-		.make_device = make_device_template<cls>,    \
-		.ptz_type_modified = cls::ptz_type_modified, \
-	}
-	// clang-format on
-	BACKEND("obsptz", obsptz_backend),
-#ifdef WITH_PTZ_TCP
-	BACKEND("visca-over-tcp", libvisca_thread),
-#endif // WITH_PTZ_TCP
-	BACKEND("dummy", dummy_backend),
-	{NULL, NULL, NULL}
-#undef BACKEND
-};
-
-static const struct ptz_backend_type_s *get_backend(const char *ptz_type)
-{
-	if (!ptz_type)
-		return nullptr;
-
-	for (int i = 0; backends[i].backend_name; i++) {
-		if (strcmp(ptz_type, backends[i].backend_name) == 0)
-			return backends + i;
-	}
-
-	return nullptr;
-}
-
-static void copy_data_item(obs_data_t *data, const char *dst_name, obs_data_item_t *src_item)
-{
-	switch (obs_data_item_gettype(src_item)) {
-	case OBS_DATA_STRING:
-		obs_data_set_string(data, dst_name, obs_data_item_get_string(src_item));
-		break;
-	case OBS_DATA_NUMBER:
-		switch (obs_data_item_numtype(src_item)) {
-		case OBS_DATA_NUM_INT:
-			obs_data_set_int(data, dst_name, obs_data_item_get_int(src_item));
-			break;
-		case OBS_DATA_NUM_DOUBLE:
-			obs_data_set_double(data, dst_name, obs_data_item_get_double(src_item));
-			break;
-		case OBS_DATA_NUM_INVALID:
-			break;
-		}
-		break;
-	case OBS_DATA_BOOLEAN:
-		obs_data_set_bool(data, dst_name, obs_data_item_get_bool(src_item));
-		break;
-	default:
-		blog(LOG_ERROR, "Cannot copy PTZ settings '%s' to '%s'", obs_data_item_get_name(src_item), dst_name);
-	}
-}
-
-static obs_data_t *get_ptz_settings(obs_data_t *settings)
-{
-	obs_data_t *data = obs_data_create();
-
-	std::string prefix = "ptz.";
-	prefix += obs_data_get_string(settings, "ptz-type");
-	prefix += ".";
-
-	for (obs_data_item_t *item = obs_data_first(settings); item; obs_data_item_next(&item)) {
-		const char *name = obs_data_item_get_name(item);
-		if (strncmp(name, prefix.c_str(), prefix.size()) != 0)
-			continue;
-		copy_data_item(data, name + prefix.size(), item);
-	}
-
-	return data;
-}
-
-static void make_device(struct face_tracker_ptz *s, const char *ptz_type, obs_data_t *data)
-{
-	s->ftm->release_dev();
-
-	bfree(s->ptz_type);
-	s->ptz_type = bstrdup(ptz_type);
-
-	auto *b = get_backend(ptz_type);
-	if (!b)
-		return;
-
-	s->ftm->dev = b->make_device(data);
 }
 
 static void ftptz_update(void *data, obs_data_t *settings)
@@ -223,44 +89,15 @@ static void ftptz_update(void *data, obs_data_t *settings)
 	debug_data_open(&s->debug_data_error, &s->debug_data_error_last, settings, "debug_data_error");
 	debug_data_open(&s->debug_data_control, &s->debug_data_control_last, settings, "debug_data_control");
 
-	static const struct
-	{
-		const char *old_name;
-		const char *new_name;
-	} renames[] = {{"ptz-obsptz-device_id", "ptz.obsptz.device_id"},
-		       {"ptz-viscaip-address", "ptz.visca-over-tcp.address"},
-		       {"ptz-viscaip-port", "ptz.visca-over-tcp.port"},
-		       {"ptz_max_x", "ptz.obsptz.max_x"},
-		       {"ptz_max_y", "ptz.obsptz.max_y"},
-		       {"ptz_max_z", "ptz.obsptz.max_z"},
-		       {nullptr, nullptr}};
-	for (int i = 0; renames[i].old_name; i++) {
-		if (obs_data_has_user_value(settings, renames[i].new_name))
-			continue;
-		obs_data_item_t *src_item = obs_data_item_byname(settings, renames[i].old_name);
-		if (!src_item)
-			continue;
+	s->ftm->dev.set_zoom_max((float)obs_data_get_double(settings, "ptz_zoom_max"));
 
-		if (obs_data_item_has_user_value(src_item))
-			copy_data_item(settings, renames[i].new_name, src_item);
-
-		obs_data_item_remove(&src_item);
-		obs_data_item_release(&src_item);
-	}
-
-	const char *ptz_type = obs_data_get_string(settings, "ptz-type");
-	if (!s->ptz_type || strcmp(ptz_type, s->ptz_type)) {
-		obs_data_t *data = get_ptz_settings(settings);
-
-		make_device(s, ptz_type, data);
-
-		obs_data_release(data);
-	} else {
-		obs_data_t *data = get_ptz_settings(settings);
-		if (s->ftm->dev)
-			s->ftm->dev->set_config(data);
-		obs_data_release(data);
-	}
+	const char *ptz_device = obs_data_get_string(settings, "ptz-device");
+	if (!*ptz_device && obs_data_has_user_value(settings, "ptz-type") &&
+	    strcmp(obs_data_get_string(settings, "ptz-type"), "dummy"))
+		blog(LOG_WARNING,
+		     "PTZ type '%s' is no longer supported. Select a PTZ device of obs-ptz in the properties.",
+		     obs_data_get_string(settings, "ptz-type"));
+	s->ftm->dev.set_device(*ptz_device ? ptz_device : nullptr);
 }
 
 static void cb_render_info(void *data, calldata_t *cd);
@@ -302,7 +139,6 @@ static void ftptz_destroy(void *data)
 		obs_hotkey_unregister(s->hotkey_reset);
 
 	delete s->ftm;
-	bfree(s->ptz_type);
 	if (s->debug_data_tracker)
 		fclose(s->debug_data_tracker);
 	if (s->debug_data_error)
@@ -327,33 +163,6 @@ static bool ftptz_reset_tracking(obs_properties_t *, obs_property_t *, void *dat
 	s->filter_int = f3(0, 0, 0);
 	s->filter_lpf = f3(0, 0, 0);
 	s->ftm->reset_requested = true;
-
-	return true;
-}
-
-static bool ptz_type_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
-{
-	const char *ptz_type = obs_data_get_string(settings, "ptz-type");
-	std::string prefix = "ptz.";
-	prefix += ptz_type;
-	prefix += ".";
-
-	obs_properties_t *group = obs_property_group_content(obs_properties_get(props, "output"));
-
-	for (obs_property_t *prop = obs_properties_first(group); prop; obs_property_next(&prop)) {
-		const char *name = obs_property_name(prop);
-		if (!name || strncmp(name, "ptz.", 4) != 0)
-			continue;
-		bool sel = strncmp(name, prefix.c_str(), prefix.size()) == 0;
-		obs_property_set_visible(prop, sel);
-	}
-
-	auto *b = get_backend(ptz_type);
-	if (b && b->ptz_type_modified) {
-		obs_properties_t *group = obs_property_group_content(obs_properties_get(props, "output"));
-
-		b->ptz_type_modified(group, settings);
-	}
 
 	return true;
 }
@@ -441,14 +250,11 @@ static obs_properties_t *ftptz_properties(void *data)
 
 	{
 		obs_properties_t *pp = obs_properties_create();
-		obs_property_t *p = obs_properties_add_list(pp, "ptz-type", obs_module_text("PTZ Type"),
+		obs_property_t *p = obs_properties_add_list(pp, "ptz-device", obs_module_text("PTZ Device"),
 							    OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-		obs_property_list_add_string(p, obs_module_text("None"), "dummy");
-		obs_property_list_add_string(p, obs_module_text("through PTZ Controls"), "obsptz");
-#ifdef WITH_PTZ_TCP
-		obs_property_list_add_string(p, obs_module_text("VISCA over TCP"), "visca-over-tcp");
-#endif // WITH_PTZ_TCP
-		obs_property_set_modified_callback(p, ptz_type_modified);
+		obs_property_list_add_string(p, obs_module_text("None"), "");
+		ptz_controller::list_devices(p);
+		obs_properties_add_float(pp, "ptz_zoom_max", obs_module_text("Maximum optical zoom"), 1.0, 100.0, 0.5);
 
 		obs_properties_add_bool(pp, "invert_x", obs_module_text("Invert control (Pan)"));
 		obs_properties_add_bool(pp, "invert_y", obs_module_text("Invert control (Tilt)"));
@@ -505,11 +311,7 @@ static void ftptz_get_defaults(obs_data_t *settings)
 	obs_data_set_default_obj(settings, "presets", presets);
 	obs_data_release(presets);
 
-	obs_data_set_default_string(settings, "ptz-type", "obsptz");
-	obs_data_set_default_int(settings, "ptz.visca-over-tcp.port", 1259);
-	obs_data_set_default_int(settings, "ptz.obsptz.max_x", PTZ_MAX_X);
-	obs_data_set_default_int(settings, "ptz.obsptz.max_y", PTZ_MAX_Y);
-	obs_data_set_default_int(settings, "ptz.obsptz.max_z", PTZ_MAX_Z);
+	obs_data_set_default_double(settings, "ptz_zoom_max", 20.0);
 }
 
 static inline int pan_flt2raw(float x)
@@ -779,9 +581,6 @@ template<typename T> static inline bool diff3(T a, T b, T c)
 
 static bool send_ptz_cmd_recall_if_timeout(struct face_tracker_ptz *s)
 {
-	if (!s->ftm->dev || !s->ftm->can_send_ptz_cmd())
-		return false;
-
 	if (!s->face_found_last_ns)
 		return false;
 
@@ -795,7 +594,7 @@ static bool send_ptz_cmd_recall_if_timeout(struct face_tracker_ptz *s)
 		return false;
 
 	s->face_lost_preset_sent++;
-	s->ftm->dev->recall_preset(s->face_lost_ptz_preset); // [0, 15] for VISCA
+	s->ftm->dev.recall_preset(s->face_lost_ptz_preset);
 
 	return true;
 }
@@ -814,20 +613,13 @@ static inline void send_ptz_cmd_immediate(struct face_tracker_ptz *s)
 		s->u_linear[2] = 1.0f;
 	}
 
-	if (!s->ftm->dev)
-		return;
-
-	s->ftm->dev->set_pantiltzoom_speed(s->u_linear[0], s->u_linear[1], s->u_linear[2]);
-
-	for (int i = 0; i < 2 && s->ftm->can_send_ptz_cmd(); i++) {
-		if (s->ftm->ptz_last_cmd != ptz_cmd_state_pantilt) {
-			s->ftm->dev->set_pantilt_speed(s->u[0], s->u[1]);
-			s->ftm->ptz_last_cmd = ptz_cmd_state_pantilt;
-		} else {
-			s->ftm->dev->set_zoom_speed(s->u[2]);
-			s->ftm->ptz_last_cmd = ptz_cmd_state_zoom;
-		}
-	}
+	// The control is in VISCA steps, the device takes -1 to 1. VISCA has tilt
+	// down and zoom wide as positive, the device has up and tele. An error too
+	// small for the first step is not sent.
+	const float pan = s->u[0] ? s->u_linear[0] / PTZ_MAX_X : 0.0f;
+	const float tilt = s->u[1] ? -s->u_linear[1] / PTZ_MAX_Y : 0.0f;
+	const float zoom = s->u[2] ? -s->u_linear[2] / PTZ_MAX_Z : 0.0f;
+	s->ftm->dev.move(pan, tilt, zoom);
 }
 
 static inline void calculate_error(struct face_tracker_ptz *s);
@@ -865,9 +657,9 @@ static void ftptz_tick(void *data, float second)
 		send_ptz_cmd_immediate(s);
 	}
 
-	if (s->ftm && s->ftm->dev) {
-		s->ftm->dev->tick();
-		s->ptz_query[2] = s->ftm->dev->get_zoom();
+	if (s->ftm) {
+		s->ftm->dev.tick();
+		s->ptz_query[2] = s->ftm->dev.get_zoom();
 	}
 }
 
