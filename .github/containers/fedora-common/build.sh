@@ -44,7 +44,6 @@ sed \
 DESTDIR='dlib-models-data/' ci/download-dlib-models.sh --nonfree
 
 git archive --format=tar --prefix=$PLUGIN_NAME_FEDORA-$VERSION/ HEAD | bzip2 > $rpmbuild/SOURCES/$PLUGIN_NAME_FEDORA-$VERSION.tar.bz2
-(cd libvisca && git archive --format=tar --prefix=libvisca/ HEAD) | bzip2 > $rpmbuild/SOURCES/$PLUGIN_NAME_FEDORA-$VERSION-libvisca.tar.bz2
 (cd dlib-models-data && tar cj .) > $rpmbuild/SOURCES/$PLUGIN_NAME_FEDORA-$VERSION-dlib-models.tar.bz2
 
 docker run -v $rpmbuild:/home/rpm/rpmbuild $docker_image bash -c "

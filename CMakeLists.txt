@@ -8,7 +8,6 @@ set(MACOS_INSTALLER_UUID "652CF739-5A6F-4DAC-9611-B068FAC15BF3")
 set(PLUGIN_URL "https://obsproject.com/forum/resources/face-tracker.1294/")
 set(LINUX_MAINTAINER_EMAIL "norihiro@nagater.net")
 
-option(WITH_PTZ_TCP "Enable to connect PTZ camera through TCP socket" ON)
 option(WITH_DLIB_SUBMODULE "Link dlib from submodule" ON)
 option(ENABLE_TESTS "Build the plugin of test sources that tests/integration loads next to this one" OFF)
 option(ENABLE_MONITOR_USER "Enable monitor source for user" OFF)
@@ -23,15 +22,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(plugin_additional_libs)
 set(plugin_additional_incs)
-
-if (WITH_PTZ_TCP)
-	set(CMAKE_POSITION_INDEPENDENT_CODE true)
-	set(WITH_VISCA_SERIAL OFF)
-	add_definitions("-DVISCA_API= ")
-	add_subdirectory(libvisca/visca)
-	set(plugin_additional_libs ${plugin_additional_libs} visca)
-	set(plugin_additional_incs ${plugin_additional_incs} libvisca/visca)
-endif()
 
 find_package(libobs REQUIRED)
 find_package(obs-frontend-api REQUIRED)
@@ -99,14 +89,8 @@ set(PLUGIN_SOURCES
 	src/texture-object.cpp
 	src/helper.cpp
 	src/ptz-controller.cpp
-	src/ptz-backend.cpp
-	src/obsptz-backend.cpp
-	src/dummy-backend.cpp
 )
 
-if (WITH_PTZ_TCP)
-	set(PLUGIN_SOURCES ${PLUGIN_SOURCES} src/libvisca-thread.cpp)
-endif()
 if (WITH_DOCK)
 	set(PLUGIN_SOURCES
 		${PLUGIN_SOURCES}
