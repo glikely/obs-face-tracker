@@ -98,6 +98,7 @@ set(PLUGIN_SOURCES
 	src/face-tracker-dlib.cpp
 	src/texture-object.cpp
 	src/helper.cpp
+	src/ptz-controller.cpp
 	src/ptz-backend.cpp
 	src/obsptz-backend.cpp
 	src/dummy-backend.cpp
