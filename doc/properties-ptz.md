@@ -153,9 +153,19 @@ Select the camera to control from the PTZ devices of [PTZ Controls](https://gith
 This needs a version of PTZ Controls whose PTZ device API is version 0.7 or later, which is newer than PTZ Controls 1.0.0-beta2.
 The selected device is remembered by its source, and is found again when it is loaded.
 
-Settings saved by older versions, which chose a type such as `through PTZ Controls` or `VISCA over TCP`, are not carried over.
-Select the device again.
 The connection to the camera is now set up in PTZ Controls.
+
+A device that is not chosen is found once OBS has loaded, for a scene saved by an older version, which chose a type such as `through PTZ Controls` or `VISCA over TCP`, and for a new filter.
+The first of these that finds exactly one device is used:
+
+1. The device with the address and port of an old `VISCA over TCP` type.
+2. The device on the source that the filter is on, which is the camera it looks at.
+3. The only device there is, for a filter that had a type.
+
+If more than one fits, or none, nothing is chosen, and `None` is used.
+The log says so for a filter that had a type.
+A device that was chosen, and `None` once it was, is never replaced.
+The old `Device ID` cannot be used: PTZ Controls no longer has device ids.
 
 ### Maximum optical zoom
 The zoom of the camera is reported as a position from 0 to 1.

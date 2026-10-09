@@ -14,6 +14,8 @@ OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 void register_face_tracker_filter(bool hide_filter, bool hide_source);
 void register_face_tracker_ptz(bool hide_ptz);
 void register_face_tracker_monitor(bool hide_monitor);
+void ft_ptz_frontend_init(void);
+void ft_ptz_frontend_exit(void);
 
 bool obs_module_load(void)
 {
@@ -41,6 +43,7 @@ bool obs_module_load(void)
 
 	register_face_tracker_filter(!show_filter, !show_source);
 	register_face_tracker_ptz(!show_ptz);
+	ft_ptz_frontend_init();
 	register_face_tracker_monitor(!show_monitor);
 
 #ifdef WITH_DOCK
@@ -54,6 +57,7 @@ bool obs_module_load(void)
 
 void obs_module_unload()
 {
+	ft_ptz_frontend_exit();
 #ifdef WITH_DOCK
 	ft_docks_release();
 #endif // WITH_DOCK

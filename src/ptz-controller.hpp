@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <atomic>
 #include <obs.h>
 
@@ -51,4 +52,21 @@ public:
 
 	static bool is_device(obs_source_t *source);
 	static void list_devices(obs_property_t *list);
+
+	struct device_info
+	{
+		std::string name, uuid;
+		// The source the device shows, and its own if it is one
+		std::string parent_uuid, parent_name;
+		// What its settings say of how it connects, if they do
+		std::string type, host;
+		long long port;
+	};
+	static std::vector<device_info> find_devices();
+
+	// Whether OBS has loaded the scene collection, so that its devices have
+	// been made. Needs frontend_init(), and says false before it.
+	static bool loading_finished();
+	static void frontend_init();
+	static void frontend_exit();
 };

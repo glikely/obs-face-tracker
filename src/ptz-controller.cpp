@@ -1,4 +1,5 @@
 #include <obs-module.h>
+#include <obs-frontend-api.h>
 #include <util/platform.h>
 #include <cmath>
 #include <algorithm>
@@ -28,31 +29,102 @@ bool ptz_controller::is_device(obs_source_t *source)
 	return ok;
 }
 
-struct list_ctx
+void ptz_controller::list_devices(obs_property_t *list)
 {
-	obs_property_t *list;
-};
-
-static void list_filter(obs_source_t *, obs_source_t *filter, void *data)
-{
-	auto *ctx = (struct list_ctx *)data;
-	if (ptz_controller::is_device(filter))
-		obs_property_list_add_string(ctx->list, obs_source_get_name(filter), obs_source_get_uuid(filter));
+	// Devices of a kind have the same name, as a filter has on each source,
+	// so say which source each is on
+	for (const auto &d : find_devices()) {
+		std::string label = d.name;
+		if (!d.parent_name.empty() && d.parent_name != d.name)
+			label += " (" + d.parent_name + ")";
+		obs_property_list_add_string(list, label.c_str(), d.uuid.c_str());
+	}
 }
 
-static bool list_source(void *data, obs_source_t *source)
+static void add_device_info(std::vector<ptz_controller::device_info> &out, obs_source_t *source)
 {
-	auto *ctx = (struct list_ctx *)data;
-	if (ptz_controller::is_device(source))
-		obs_property_list_add_string(ctx->list, obs_source_get_name(source), obs_source_get_uuid(source));
-	obs_source_enum_filters(source, list_filter, data);
+	if (!ptz_controller::is_device(source))
+		return;
+
+	ptz_controller::device_info d;
+	d.name = obs_source_get_name(source);
+	d.uuid = obs_source_get_uuid(source);
+
+	obs_source_t *parent = obs_source_get_type(source) == OBS_SOURCE_TYPE_FILTER ? obs_filter_get_parent(source)
+										     : source;
+	if (parent) {
+		d.parent_uuid = obs_source_get_uuid(parent);
+		d.parent_name = obs_source_get_name(parent);
+	}
+
+	obs_data_t *settings = obs_source_get_settings(source);
+	d.type = obs_data_get_string(settings, "type");
+	d.host = obs_data_get_string(settings, "host");
+	d.port = obs_data_get_int(settings, "tcp_port");
+	obs_data_release(settings);
+
+	out.push_back(d);
+}
+
+static void find_filter(obs_source_t *, obs_source_t *filter, void *data)
+{
+	add_device_info(*(std::vector<ptz_controller::device_info> *)data, filter);
+}
+
+static bool find_source(void *data, obs_source_t *source)
+{
+	add_device_info(*(std::vector<ptz_controller::device_info> *)data, source);
+	obs_source_enum_filters(source, find_filter, data);
 	return true;
 }
 
-void ptz_controller::list_devices(obs_property_t *list)
+std::vector<ptz_controller::device_info> ptz_controller::find_devices()
 {
-	struct list_ctx ctx = {list};
-	obs_enum_sources(list_source, &ctx);
+	std::vector<device_info> devices;
+	obs_enum_sources(find_source, &devices);
+	return devices;
+}
+
+extern "C" void ft_ptz_frontend_init(void)
+{
+	ptz_controller::frontend_init();
+}
+
+extern "C" void ft_ptz_frontend_exit(void)
+{
+	ptz_controller::frontend_exit();
+}
+
+static std::atomic<bool> frontend_loaded{false};
+
+static void frontend_event(enum obs_frontend_event event, void *)
+{
+	switch (event) {
+	case OBS_FRONTEND_EVENT_FINISHED_LOADING:
+	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED:
+		frontend_loaded = true;
+		break;
+	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGING:
+		frontend_loaded = false;
+		break;
+	default:
+		break;
+	}
+}
+
+bool ptz_controller::loading_finished()
+{
+	return frontend_loaded;
+}
+
+void ptz_controller::frontend_init()
+{
+	obs_frontend_add_event_callback(frontend_event, nullptr);
+}
+
+void ptz_controller::frontend_exit()
+{
+	obs_frontend_remove_event_callback(frontend_event, nullptr);
 }
 
 ptz_controller::~ptz_controller()

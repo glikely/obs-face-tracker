@@ -24,6 +24,21 @@ public:
 	std::shared_ptr<texture_object> cvtex_cache;
 	ptz_controller dev;
 
+	// What an older version saved of how it reached the camera, which says
+	// which device to choose when none has been
+	struct
+	{
+		bool present;
+		std::string type;
+		int device_id;
+		std::string host;
+		int port;
+	} legacy = {false, "", -1, "", 0};
+	bool device_chosen = false;
+	bool migrate_warned = false;
+	uint64_t migrate_ns = 0;
+	int migrate_attempts = 0;
+
 public:
 	ft_manager_for_ftptz(struct face_tracker_ptz *ctx_)
 	{
@@ -92,12 +107,114 @@ static void ftptz_update(void *data, obs_data_t *settings)
 	s->ftm->dev.set_zoom_max((float)obs_data_get_double(settings, "ptz_zoom_max"));
 
 	const char *ptz_device = obs_data_get_string(settings, "ptz-device");
-	if (!*ptz_device && obs_data_has_user_value(settings, "ptz-type") &&
-	    strcmp(obs_data_get_string(settings, "ptz-type"), "dummy"))
-		blog(LOG_WARNING,
-		     "PTZ type '%s' is no longer supported. Select a PTZ device of obs-ptz in the properties.",
-		     obs_data_get_string(settings, "ptz-type"));
 	s->ftm->dev.set_device(*ptz_device ? ptz_device : nullptr);
+
+	// A choice that is empty is also one: None
+	s->ftm->device_chosen = obs_data_has_user_value(settings, "ptz-device");
+	s->ftm->migrate_attempts = 0;
+	s->ftm->migrate_ns = 0;
+
+	// What the PTZ type, and what it needed, were called before the type
+	// became a device, and before that
+	auto legacy_name = [&](const char *name, const char *older) {
+		return obs_data_has_user_value(settings, name) ? name : older;
+	};
+	auto &legacy = s->ftm->legacy;
+	legacy.type = obs_data_get_string(settings, "ptz-type");
+	legacy.device_id = obs_data_has_user_value(settings, "ptz.obsptz.device_id") ||
+					   obs_data_has_user_value(settings, "ptz-obsptz-device_id")
+				   ? (int)obs_data_get_int(settings,
+							   legacy_name("ptz.obsptz.device_id", "ptz-obsptz-device_id"))
+				   : -1;
+	legacy.host = obs_data_get_string(settings, legacy_name("ptz.visca-over-tcp.address", "ptz-viscaip-address"));
+	legacy.port = (int)obs_data_get_int(settings, legacy_name("ptz.visca-over-tcp.port", "ptz-viscaip-port"));
+	legacy.present = !legacy.type.empty() || legacy.device_id >= 0 || !legacy.host.empty();
+}
+
+/*
+ * A tracker saved before its PTZ type became a device, or that has no device
+ * chosen at all, takes the one that is the camera it looks at.
+ * It can't be named: the devices have no ids that a plugin that was not there
+ * can make out, and an address may be of any of them.
+ * So it is decided from what is there once OBS has loaded, in this order:
+ *  1. the device that has the address and port of the old VISCA over TCP,
+ *  2. the device on the source the tracker is a filter of, as it looks at
+ *     what that camera sees,
+ *  3. the only device there is, for a tracker that had a type.
+ * Nothing is chosen if more than one fits, which is left to the user.
+ * It is tried for a few seconds after OBS has loaded, and again when the
+ * settings change.
+ * A device that is None, or one that was chosen, is never changed.
+ */
+#define MIGRATE_ATTEMPTS 15
+
+static void migrate_ptz_device(struct face_tracker_ptz *s)
+{
+	auto *m = s->ftm;
+	if (m->device_chosen || m->legacy.type == "dummy")
+		return;
+	if (!ptz_controller::loading_finished())
+		return;
+
+	// A device may be made a little later, so ask again, but not for ever:
+	// every source is asked its version each time
+	if (m->migrate_attempts >= MIGRATE_ATTEMPTS)
+		return;
+	uint64_t ns = os_gettime_ns();
+	if (ns < m->migrate_ns)
+		return;
+	m->migrate_ns = ns + 1000000000ULL;
+	m->migrate_attempts++;
+
+	obs_source_t *parent = obs_filter_get_parent(s->context);
+	std::string parent_uuid = parent ? obs_source_get_uuid(parent) : "";
+
+	auto devices = ptz_controller::find_devices();
+	auto only = [&](auto fits) -> const ptz_controller::device_info * {
+		const ptz_controller::device_info *found = nullptr;
+		for (const auto &d : devices) {
+			if (!fits(d))
+				continue;
+			if (found)
+				return nullptr;
+			found = &d;
+		}
+		return found;
+	};
+
+	const ptz_controller::device_info *pick = nullptr;
+	const char *why = "";
+	if (!m->legacy.host.empty()) {
+		pick = only([&](const ptz_controller::device_info &d) {
+			return d.type == "visca-over-tcp" && d.host == m->legacy.host &&
+			       (m->legacy.port <= 0 || d.port == m->legacy.port);
+		});
+		why = "has the address of the PTZ type";
+	}
+	if (!pick && !parent_uuid.empty()) {
+		pick = only([&](const ptz_controller::device_info &d) { return d.parent_uuid == parent_uuid; });
+		why = "is on the source that is tracked";
+	}
+	if (!pick && m->legacy.present) {
+		pick = only([](const ptz_controller::device_info &) { return true; });
+		why = "is the only one";
+	}
+
+	if (pick) {
+		blog(LOG_INFO, "'%s' uses PTZ device '%s', which %s", obs_source_get_name(s->context),
+		     pick->name.c_str(), why);
+		m->device_chosen = true;
+		obs_data_t *patch = obs_data_create();
+		obs_data_set_string(patch, "ptz-device", pick->uuid.c_str());
+		obs_source_update(s->context, patch);
+		obs_data_release(patch);
+	} else if (m->legacy.present && !m->migrate_warned) {
+		m->migrate_warned = true;
+		blog(LOG_WARNING,
+		     "'%s' was set up for a PTZ type that is no longer, and which PTZ device it is cannot be told. "
+		     "Select the PTZ device in its properties.",
+		     obs_source_get_name(s->context));
+	}
 }
 
 static void cb_render_info(void *data, calldata_t *cd);
@@ -629,6 +746,9 @@ static void ftptz_tick(void *data, float second)
 	auto *s = (struct face_tracker_ptz *)data;
 	const bool was_rendered = s->rendered;
 	s->ftm->tick(second);
+
+	// Before there is video to track: it does not depend on it
+	migrate_ptz_device(s);
 
 	obs_source_t *target = obs_filter_get_target(s->context);
 	if (!target)

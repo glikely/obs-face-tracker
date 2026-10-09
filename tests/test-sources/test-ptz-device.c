@@ -222,7 +222,9 @@ void register_test_ptz_device(void)
 	struct obs_source_info info = {
 		.id = "face_tracker_test_ptz_device",
 		.type = OBS_SOURCE_TYPE_INPUT,
-		.output_flags = OBS_SOURCE_VIDEO,
+		// Async, as the tracker is a filter of that kind only, and it may be
+		// of the device as it is of a camera's source
+		.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_ASYNC,
 		.get_name = test_ptz_device_name,
 		.create = test_ptz_device_create,
 		.destroy = test_ptz_device_destroy,

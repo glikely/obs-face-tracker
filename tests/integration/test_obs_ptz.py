@@ -188,6 +188,21 @@ def test_the_camera_goes_to_the_preset_when_the_face_is_lost(world, sim, camera)
     tracker.remove()
 
 
+def test_a_tracker_of_an_old_scene_finds_the_device_on_its_source(world, camera):
+    # As one saved with the old PTZ Controls type, on the camera's own source
+    tracker = world.make_tracker(camera.source, **{"ptz-type": "obsptz", "ptz.obsptz.device_id": 2})
+    world.wait_for(lambda: tracker.settings().get("ptz-device"), timeout=10)
+    assert tracker.settings()["ptz-device"] == camera.uuid
+
+
+def test_the_address_of_the_old_type_finds_the_device(world, camera):
+    # On a source of its own, so it can only be found by the address
+    tracker = world.make_tracker(**{"ptz-type": "visca-over-tcp", "ptz.visca-over-tcp.address": camera.host,
+                                    "ptz.visca-over-tcp.port": camera.port})
+    world.wait_for(lambda: tracker.settings().get("ptz-device"), timeout=10)
+    assert tracker.settings()["ptz-device"] == camera.uuid
+
+
 def test_the_tracker_learns_where_a_camera_is_zoomed_to_when_it_finds_it(world, sim):
     """A device says what changed, and one at rest says nothing, so the tracker
     that finds a camera that was zoomed in has to ask it where it is, or it

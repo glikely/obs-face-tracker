@@ -27,6 +27,11 @@ It also covers zoom out for a face that is larger than the tracker's target and 
 and the preset recalled when the face is lost, which is not when it is disabled.
 It does not yet cover the size of the moves, or several faces.
 
+`test_migration.py` covers the tracker choosing a device when it has none, for a scene saved with a PTZ type and its address
+or device id, and for a new one:
+by the address and port, by the device on the tracker's own source, by being the only device,
+and not choosing when more than one fits, or when `None` or a device was chosen.
+
 `test_obs_ptz.py` covers the same against obs-ptz itself, with obs-ptz's camera simulator `ptzsim` behind it,
 as the test device only models the API as this repository reads it:
 each direction of pan, tilt and zoom reaches the simulated camera with the sign the camera has,
