@@ -2,10 +2,14 @@
 #include <obs-frontend-api.h>
 #include <util/platform.h>
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 #include "plugin-macros.generated.h"
 #include "ptz-controller.hpp"
 #include "helper.hpp"
+
+// The obs-ptz device that shows a part of its source's picture
+#define SOFT_PTZ_KIND "ca.secretlab.obs-ptz.soft-ptz"
 
 // The API version this controller was written for: 0.7 is the first in which
 // ptz_get_state may be called from any thread, which the tracker's is not
@@ -13,7 +17,10 @@
 #define PTZ_API_MINOR 7
 
 #define LOOKUP_INTERVAL_NS (1000ULL * 1000 * 1000)
+// Its own rates are in units a second, of which a pan unit is half the picture
+#define DIGITAL_FULL_SPEED 1.0f
 #define MOVE_INTERVAL_NS (50ULL * 1000 * 1000)
+#define LOG_INTERVAL_NS (2ULL * 1000 * 1000 * 1000)
 #define MOVE_EPSILON 0.005f
 
 bool ptz_controller::is_device(obs_source_t *source)
@@ -146,10 +153,14 @@ void ptz_controller::read_state(obs_source_t *source)
 	proc_handler_call(obs_source_get_proc_handler(source), "ptz_get_state", &cd);
 	calldata_free(&cd);
 
+	if (obs_data_has_user_value(state, "pan"))
+		pan_pos = (float)obs_data_get_double(state, "pan");
+	if (obs_data_has_user_value(state, "tilt"))
+		tilt_pos = (float)obs_data_get_double(state, "tilt");
 	if (obs_data_has_user_value(state, "zoom"))
 		zoom_pos = (float)obs_data_get_double(state, "zoom");
-	blog(LOG_INFO, "'%s' is at pan %.2f tilt %.2f zoom %.2f", obs_source_get_name(source),
-	     obs_data_get_double(state, "pan"), obs_data_get_double(state, "tilt"), zoom_pos.load());
+	blog(LOG_INFO, "'%s' is at pan %.2f tilt %.2f zoom %.2f", obs_source_get_name(source), pan_pos.load(),
+	     tilt_pos.load(), zoom_pos.load());
 
 	obs_data_release(state);
 }
@@ -158,8 +169,29 @@ void ptz_controller::state_changed_cb(void *data, calldata_t *cd)
 {
 	auto *self = (ptz_controller *)data;
 	auto *changed = (obs_data_t *)calldata_ptr(cd, "changed");
-	if (changed && obs_data_has_user_value(changed, "zoom"))
+	if (!changed)
+		return;
+	if (obs_data_has_user_value(changed, "zoom"))
 		self->zoom_pos = (float)obs_data_get_double(changed, "zoom");
+	if (obs_data_has_user_value(changed, "pan"))
+		self->pan_pos = (float)obs_data_get_double(changed, "pan");
+	if (obs_data_has_user_value(changed, "tilt"))
+		self->tilt_pos = (float)obs_data_get_double(changed, "tilt");
+}
+
+void ptz_controller::read_digital_settings(obs_source_t *source)
+{
+	// How much of the picture it magnifies at its full zoom, which is a
+	// setting of the device and not part of its state
+	obs_data_t *settings = obs_source_get_settings(source);
+	double max_zoom = obs_data_get_double(settings, "max_zoom");
+	digital_max_zoom = max_zoom >= 1.0 ? (float)max_zoom : 1.0f;
+
+	double pantilt_rate = obs_data_get_double(settings, "pantilt_rate");
+	double zoom_rate = obs_data_get_double(settings, "zoom_rate");
+	digital_pantilt_rate = pantilt_rate > 0.0 ? (float)pantilt_rate : 0.5f;
+	digital_zoom_rate = zoom_rate > 0.0 ? (float)zoom_rate : 0.5f;
+	obs_data_release(settings);
 }
 
 bool ptz_controller::connect(obs_source_t *source)
@@ -177,6 +209,13 @@ bool ptz_controller::connect(obs_source_t *source)
 	weak = obs_source_get_weak_source(source);
 
 	read_state(source);
+
+	digital = strcmp(obs_source_get_id(source), SOFT_PTZ_KIND) == 0;
+	if (digital) {
+		blog(LOG_INFO, "'%s' is a digital PTZ, so the picture it shows is what is tracked",
+		     obs_source_get_name(source));
+		read_digital_settings(source);
+	}
 	return true;
 }
 
@@ -194,6 +233,9 @@ void ptz_controller::disconnect()
 	obs_weak_source_release(weak);
 	weak = nullptr;
 	zoom_pos = 0.0f;
+	pan_pos = 0.0f;
+	tilt_pos = 0.0f;
+	digital = false;
 }
 
 void ptz_controller::set_device(const char *uuid_)
@@ -217,9 +259,20 @@ void ptz_controller::tick()
 
 	// The device may be gone, or not loaded yet; ask again later.
 	if (weak) {
-		if (!obs_weak_source_expired(weak))
+		if (obs_weak_source_expired(weak)) {
+			disconnect();
+		} else {
+			// What a digital device magnifies can be changed
+			uint64_t now = os_gettime_ns();
+			if (digital && now >= next_settings_ns) {
+				next_settings_ns = now + LOOKUP_INTERVAL_NS;
+				if (obs_source_t *source = obs_weak_source_get_source(weak)) {
+					read_digital_settings(source);
+					obs_source_release(source);
+				}
+			}
 			return;
-		disconnect();
+		}
 	}
 
 	uint64_t ns = os_gettime_ns();
@@ -250,6 +303,19 @@ void ptz_controller::call(const char *proc, calldata_t *cd)
 
 void ptz_controller::move(float pan, float tilt, float zoom)
 {
+	// The speeds are for a camera. A digital PTZ's full speed is its rate
+	// setting, which is slow at its default, and the picture then follows a
+	// face over many seconds. So take them as of a device whose full speed is
+	// DIGITAL_FULL_SPEED, whatever the rate is. It is where tracking a face
+	// came out smooth and without much overshoot, with Soft PTZ at its
+	// default rates, and a quarter of it was too slow to be seen to move.
+	if (digital) {
+		const float pt = DIGITAL_FULL_SPEED / digital_pantilt_rate.load();
+		const float z = DIGITAL_FULL_SPEED / digital_zoom_rate.load();
+		pan *= pt;
+		tilt *= pt;
+		zoom *= z;
+	}
 	const float v[3] = {std::clamp(pan, -1.0f, 1.0f), std::clamp(tilt, -1.0f, 1.0f),
 			    std::clamp(zoom, -1.0f, 1.0f)};
 
@@ -269,6 +335,23 @@ void ptz_controller::move(float pan, float tilt, float zoom)
 	calldata_set_float(&cd, "tilt", v[1]);
 	calldata_set_float(&cd, "zoom", v[2]);
 	call("ptz_move", &cd);
+
+	// What it is asked, for the log: not each change, as a dead zone makes
+	// that go back and forth, but what it was asked, every few seconds
+	moving = !stopping;
+	if (ns >= log_ns) {
+		log_ns = ns + LOG_INTERVAL_NS;
+		if (moving) {
+			float cx, cy, size;
+			if (viewport(cx, cy, size))
+				blog(LOG_INFO,
+				     "asked the PTZ device to move: pan %.2f tilt %.2f zoom %.2f; it shows %.0f%% of the picture around %.2f, %.2f",
+				     v[0], v[1], v[2], size * 100.0f, cx, cy);
+			else
+				blog(LOG_INFO, "asked the PTZ device to move: pan %.2f tilt %.2f zoom %.2f", v[0], v[1],
+				     v[2]);
+		}
+	}
 
 	std::copy(v, v + 3, sent);
 	sent_ns = ns;
@@ -293,7 +376,26 @@ void ptz_controller::recall_preset(int slot)
 	call("ptz_preset_recall", &cd);
 }
 
+float ptz_controller::gain_zoom() const
+{
+	return digital ? 1.0f : get_zoom();
+}
+
 float ptz_controller::get_zoom() const
 {
-	return std::exp(zoom_pos.load() * std::log(zoom_max));
+	// A digital device knows how much it magnifies
+	const float max = digital ? digital_max_zoom.load() : zoom_max;
+	return std::exp(zoom_pos.load() * std::log(max));
+}
+
+bool ptz_controller::viewport(float &center_x, float &center_y, float &size) const
+{
+	if (!digital)
+		return false;
+	// Pan and tilt are in [-1, 1] and a unit is half the picture, with tilt
+	// up while the picture's y runs down; it shows 1/scale of each side
+	center_x = 0.5f + pan_pos.load() * 0.5f;
+	center_y = 0.5f - tilt_pos.load() * 0.5f;
+	size = 1.0f / get_zoom();
+	return true;
 }

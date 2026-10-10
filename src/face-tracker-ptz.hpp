@@ -20,6 +20,11 @@ struct face_tracker_ptz
 	f3 detect_err;
 	bool face_found, face_found_last;
 
+	// The faces it tracked on the last frame, for the log: where each is in
+	// the picture it has, as fractions of it, and how big
+	int dbg_n;
+	float dbg_face[4][3];
+
 	class ft_manager_for_ftptz *ftm;
 
 	float track_z, track_x, track_y;

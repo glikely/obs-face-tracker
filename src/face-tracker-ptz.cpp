@@ -34,6 +34,7 @@ public:
 		std::string host;
 		int port;
 	} legacy = {false, "", -1, "", 0};
+	uint64_t log_faces_ns = 0;
 	bool device_chosen = false;
 	bool migrate_warned = false;
 	uint64_t migrate_ns = 0;
@@ -741,6 +742,23 @@ static inline void send_ptz_cmd_immediate(struct face_tracker_ptz *s)
 
 static inline void calculate_error(struct face_tracker_ptz *s);
 
+// Where the faces are, which says what the control was working from
+static void log_faces(struct face_tracker_ptz *s)
+{
+	static const uint64_t interval_ns = 2000000000ULL;
+	uint64_t ns = os_gettime_ns();
+	if (ns < s->ftm->log_faces_ns || s->dbg_n == 0)
+		return;
+	s->ftm->log_faces_ns = ns + interval_ns;
+
+	char text[160] = "";
+	size_t len = 0;
+	for (int i = 0; i < s->dbg_n && len < sizeof(text); i++)
+		len += snprintf(text + len, sizeof(text) - len, "%s(%.2f, %.2f) size %.2f", i ? "; " : "",
+				s->dbg_face[i][0], s->dbg_face[i][1], s->dbg_face[i][2]);
+	blog(LOG_INFO, "tracking %d face(s) at %s of the whole picture", s->dbg_n, text);
+}
+
 static void ftptz_tick(void *data, float second)
 {
 	auto *s = (struct face_tracker_ptz *)data;
@@ -766,8 +784,10 @@ static void ftptz_tick(void *data, float second)
 		return;
 
 	if (was_rendered) {
-		if (!s->is_paused)
+		if (!s->is_paused) {
 			calculate_error(s);
+			log_faces(s);
+		}
 		else {
 			s->face_found = false;
 			s->detect_err = f3(0, 0, 0);
@@ -779,12 +799,13 @@ static void ftptz_tick(void *data, float second)
 
 	if (s->ftm) {
 		s->ftm->dev.tick();
-		s->ptz_query[2] = s->ftm->dev.get_zoom();
+		s->ptz_query[2] = s->ftm->dev.gain_zoom();
 	}
 }
 
 static inline void calculate_error(struct face_tracker_ptz *s)
 {
+	s->dbg_n = 0;
 	f3 e_tot(0.0f, 0.0f, 0.0f);
 	float sc_tot = 0.0f;
 	bool found = false;
@@ -807,6 +828,28 @@ static inline void calculate_error(struct face_tracker_ptz *s)
 		if (s->debug_data_tracker) {
 			fprintf(s->debug_data_tracker, "%f\t%f\t%f\t%f\t%f\n", os_gettime_ns() * 1e-9, r.v[0], r.v[1],
 				r.v[2], score);
+		}
+
+		if (s->dbg_n < 4 && s->known_width > 0 && s->known_height > 0) {
+			const float fw = (float)s->known_width;
+			const float fh = (float)s->known_height;
+			s->dbg_face[s->dbg_n][0] = r.v[0] / fw;
+			s->dbg_face[s->dbg_n][1] = r.v[1] / fh;
+			s->dbg_face[s->dbg_n][2] = r.v[2] / sqrtf(fw * fh);
+			s->dbg_n++;
+		}
+
+		// A digital PTZ shows a part of the picture, which this has the whole
+		// of: put the face where it is in what is shown, as a camera that has
+		// moved would show it
+		float vcx, vcy, vsize;
+		if (s->ftm->dev.viewport(vcx, vcy, vsize)) {
+			// In the pixels of the source, not of the scaled copy of it
+			const float fw = (float)s->known_width;
+			const float fh = (float)s->known_height;
+			r.v[0] = (r.v[0] - vcx * fw) / vsize + fw * 0.5f;
+			r.v[1] = (r.v[1] - vcy * fh) / vsize + fh * 0.5f;
+			r.v[2] /= vsize;
 		}
 
 		r.v[0] -= get_width(tracker_rects[i].crop_rect) * s->track_x;
@@ -956,6 +999,20 @@ static void draw_frame_info(struct face_tracker_ptz *s, bool landmark_only = fal
 	bool draw_lmk = true;
 	bool draw_ref = !landmark_only;
 	gs_effect_t *effect = obs_get_base_effect(OBS_EFFECT_SOLID);
+
+	// Faces are where they are in the picture the source has. A digital PTZ
+	// shows a part of it, so they are drawn where they are in that, with
+	// what a camera that had moved would show, as the control does. The
+	// reference below is where a face is to be in what is shown.
+	float vcx, vcy, vsize;
+	const bool in_viewport = s->ftm->dev.viewport(vcx, vcy, vsize);
+	if (in_viewport) {
+		gs_matrix_push();
+		// The last is the first applied: from the viewport's centre to the middle
+		gs_matrix_translate3f(0.5f * s->known_width, 0.5f * s->known_height, 0.0f);
+		gs_matrix_scale3f(1.0f / vsize, 1.0f / vsize, 1.0f);
+		gs_matrix_translate3f(-vcx * s->known_width, -vcy * s->known_height, 0.0f);
+	}
 	while (gs_effect_loop(effect, "Solid")) {
 		if (draw_det) {
 			gs_effect_set_color(gs_effect_get_param_by_name(effect, "color"), 0xFF0000FF);
@@ -972,7 +1029,11 @@ static void draw_frame_info(struct face_tracker_ptz *s, bool landmark_only = fal
 			if (draw_lmk && tr.landmark.size())
 				draw_landmark(tr.landmark);
 		}
+	}
+	if (in_viewport)
+		gs_matrix_pop();
 
+	while (gs_effect_loop(effect, "Solid")) {
 		if (draw_ref) {
 			gs_effect_set_color(gs_effect_get_param_by_name(effect, "color"), 0xFFFFFF00); // amber
 			gs_render_start(false);

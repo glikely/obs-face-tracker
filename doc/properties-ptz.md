@@ -167,10 +167,22 @@ The log says so for a filter that had a type.
 A device that was chosen, and `None` once it was, is never replaced.
 The old `Device ID` cannot be used: PTZ Controls no longer has device ids.
 
+### Digital PTZ
+PTZ Controls' `Soft PTZ Control` shows a part of its source's picture, which is a digital PTZ and not a camera.
+Add the filter `Soft PTZ Control` and `Face Tracker PTZ` to the same source, and the tracker uses the Soft PTZ.
+The order of the filters does not matter: `Face Tracker PTZ` always sees the whole picture of the source.
+It accounts for the part that the Soft PTZ shows, so that the face is held in what the viewer sees.
+
+It knows how much the Soft PTZ magnifies from its `Maximum zoom`, and not from `Maximum optical zoom` below.
+How fast the picture follows the face does not depend on the Soft PTZ's `Pan/tilt rate` and `Zoom rate`: the tracker takes them into account.
+A face that is not at the target takes several seconds to be followed, and it is not a bug if it is not at once.
+The detector's crop settings should be zero, as it is where it is the whole picture that is looked at.
+
 ### Maximum optical zoom
 The zoom of the camera is reported as a position from 0 to 1.
 The magnification of the lens is needed to slow the control down when zoomed in.
 Set the magnification of the lens at its full zoom.
+A digital PTZ is not asked: it says its own.
 The default is `20`.
 
 ### Invert control (pan, tilt, zoom)

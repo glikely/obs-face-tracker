@@ -37,6 +37,8 @@ as the test device only models the API as this repository reads it:
 each direction of pan, tilt and zoom reaches the simulated camera with the sign the camera has,
 the camera is stopped when the tracker goes, a face that is lost sends the camera to a preset it was saved in,
 and a camera that was zoomed in before the tracker found it is known to be.
+It also covers a digital PTZ, obs-ptz's Soft PTZ, which shows a part of the picture that the tracker has the whole of:
+a face off center is brought to the center of the viewport, and the markers stay on the face.
 These tests are skipped without `OBS_PTZ_PLUGIN` and `OBS_PTZ_REPO`.
 The obs-ptz they load has to have version 0.7 of the PTZ API or later, as the tracker needs.
 

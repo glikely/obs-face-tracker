@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-from conftest import FACE_IMAGE, free_port, have_detector_model, output_log, wait_for_port
+from conftest import FACE_IMAGE, bounding_box, free_port, have_detector_model, is_marker, is_photo, output_log, wait_for_port
 
 OBS_PTZ_REPO = os.environ.get("OBS_PTZ_REPO")
 FILTER_KIND = "ca.secretlab.obs-ptz.visca"
@@ -201,6 +201,103 @@ def test_the_address_of_the_old_type_finds_the_device(world, camera):
                                     "ptz.visca-over-tcp.port": camera.port})
     world.wait_for(lambda: tracker.settings().get("ptz-device"), timeout=10)
     assert tracker.settings()["ptz-device"] == camera.uuid
+
+
+SOFT_KIND = "ca.secretlab.obs-ptz.soft-ptz"
+
+
+def soft_ptz_on(world, center, is_there, **settings):
+    """A Soft PTZ, which shows a part of the picture, and a tracker on the
+    same source, which has the whole of it and finds the Soft PTZ by it being
+    there. Waits for the viewport, as the Soft PTZ saves it once it has
+    stopped, to be where is_there() says, and returns it."""
+    source = world.make_face_source(center)
+    soft = world.unique("Soft PTZ")
+    world.ws.call("CreateSourceFilter", {"sourceName": source, "filterName": soft, "filterKind": SOFT_KIND,
+                                         "filterSettings": {}})
+    # Its default scale, which the rectangles of faces are not in the pixels of
+    tracker = world.make_tracker(source, **{"track_x": 0.0, "track_y": 0.0, "track_z": 1.0, **settings})
+
+    def viewport():
+        saved = world.ws.call("GetSourceFilter", {"sourceName": source, "filterName": soft})["filterSettings"]
+        return saved.get("viewport")
+
+    # It does not stand still, as a dead zone has it move a little at a time,
+    # so ask for where it is, and not for it to have stopped
+    last = {}
+
+    def there():
+        last["pos"] = viewport()
+        return last["pos"] is not None and is_there(last["pos"])
+
+    try:
+        world.wait_for(there, timeout=60, interval=1.0)
+    except AssertionError:
+        raise AssertionError(f"the viewport never got there; it was {last.get('pos')}")
+    finally:
+        tracker.remove()
+    return last["pos"]
+
+
+def test_a_digital_ptz_is_centered_on_a_face_on_the_right(world):
+    # The viewport's centre is where the face is: pan is a unit of half the picture
+    pos = soft_ptz_on(world, (0.65, 0.5), lambda p: p["zoom"] > 0.05 and abs(p["pan"] - 0.3) < 0.1)
+    assert abs(pos["tilt"]) < 0.1
+
+
+def test_a_digital_ptz_is_centered_on_a_face_on_the_left(world):
+    soft_ptz_on(world, (0.35, 0.5), lambda p: p["zoom"] > 0.05 and abs(p["pan"] + 0.3) < 0.1)
+
+
+def test_a_digital_ptz_is_centered_on_a_face_above(world):
+    # Tilt is up, and the picture's y runs down
+    pos = soft_ptz_on(world, (0.5, 0.35), lambda p: p["zoom"] > 0.05 and abs(p["tilt"] - 0.3) < 0.1)
+    assert abs(pos["pan"]) < 0.1
+
+
+def test_the_face_markers_follow_the_picture_of_a_digital_ptz(world):
+    """The markers are drawn where the faces are in what the Soft PTZ shows,
+    and not where they are in the whole picture, so that they stay on the
+    face when it is moved or zoomed."""
+    import time
+
+    # Large enough to be found at the detector's default scale, and zoomed
+    # only so much that it is all still in the picture
+    source = world.make_face_source((0.5, 0.5), face_height=0.5)
+    soft = world.unique("Soft PTZ")
+    world.ws.call("CreateSourceFilter", {"sourceName": source, "filterName": soft, "filterKind": SOFT_KIND,
+                                         "filterSettings": {"viewport": {"pan": 0.2, "tilt": 0.0, "zoom": 0.3}}})
+    # The least gain, so that it does not move the viewport that is being looked at
+    tracker = world.make_tracker(source, debug_faces=True, debug_always_show=True, Kp_x_db=-40.0, Kp_y_db=-40.0,
+                                 Kp_z_db=-40.0, Ki_x=0.0, Ki_y=0.0, Ki_z=0.0, Td_x=0.0, Td_y=0.0, Td_z=0.0,
+                                 track_z=1.0)
+
+    box = {}
+
+    def seen():
+        image = world.screenshot(source)
+        box["marker"] = bounding_box(image, is_marker)
+        box["photo"] = bounding_box(image, is_photo, thickness=5)
+        return box["marker"] is not None and box["photo"] is not None
+
+    try:
+        world.wait_for(seen, timeout=30, interval=1.0)
+        time.sleep(1.0)
+        seen()
+    finally:
+        tracker.remove()
+
+    marker, photo = box["marker"], box["photo"]
+    # The viewport is to the right of the middle, so the photo is to the left
+    # of it, and the markers are on it, as they are where the face is
+    assert photo[0] + photo[2] < 2 * 480 - 120, photo
+    marker_x = (marker[0] + marker[2]) / 2
+    photo_x = (photo[0] + photo[2]) / 2
+    assert abs(marker_x - photo_x) < 25, (marker, photo)
+    # and are as big as the face is on the photo, which is not as it is in the
+    # whole picture, where they are 0.50 of it: it is 0.76 of the photo here
+    ratio = (marker[3] - marker[1]) / (photo[3] - photo[1])
+    assert 0.65 < ratio < 0.9, (ratio, marker, photo)
 
 
 def test_the_tracker_learns_where_a_camera_is_zoomed_to_when_it_finds_it(world, sim):
