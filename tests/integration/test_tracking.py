@@ -50,3 +50,41 @@ def test_a_face_above_is_followed_up(world):
 
 def test_a_face_below_is_followed_down(world):
     assert drive(world, (0.5, 0.75))[0][1] < 0
+
+
+def test_a_face_that_is_too_large_is_zoomed_out(world):
+    # Zoom is positive towards the tele end, as it is for the device API
+    assert drive(world, (0.5, 0.5), track_z=0.1)[0][2] < 0
+
+
+def test_a_face_that_is_too_small_is_zoomed_in(world):
+    assert drive(world, (0.5, 0.5), track_z=2.0)[0][2] > 0
+
+
+def test_the_preset_is_recalled_when_the_face_is_lost(world):
+    device = world.make_device()
+    source = world.make_face_source((0.5, 0.5))
+    tracker = world.make_tracker(source, **{**TRACKER, "ptz-device": device.uuid, "face_lost_ptz_preset": 3,
+                                            "face_lost_preset_timeout": 1.0})
+    # Seen first, as there is nothing to lose before
+    world.wait_for(lambda: moves(device) or device.calls("preset_recall"), timeout=20)
+    assert device.calls("preset_recall") == []
+
+    world.move_face(source, (5.0, 5.0))
+    device.wait_for_call("preset_recall", timeout=20)
+    assert device.calls("preset_recall")[0] == "preset_recall camera:3"
+    tracker.remove()
+
+
+def test_the_preset_is_not_recalled_when_it_is_disabled(world):
+    device = world.make_device()
+    source = world.make_face_source((0.5, 0.5))
+    tracker = world.make_tracker(source, **{**TRACKER, "ptz-device": device.uuid, "face_lost_ptz_preset": -1,
+                                            "face_lost_preset_timeout": 1.0})
+    world.wait_for(lambda: moves(device), timeout=20)
+
+    world.move_face(source, (5.0, 5.0))
+    import time
+    time.sleep(4)
+    assert device.calls("preset_recall") == []
+    tracker.remove()

@@ -469,6 +469,18 @@ class World:
         self.ws.call("SetCurrentProgramScene", {"sceneName": scene})
         return name
 
+    def move_face(self, source, center):
+        """Moves the face of a source made by make_face_source(). A center
+        outside of the frame takes it out of view."""
+        self.counter += 1
+        frame = self.tmp / f"{source}-{self.counter}.bgra"
+        width, height = write_face_frame(frame, center)
+        self.ws.call("SetInputSettings", {
+            "inputName": source,
+            "inputSettings": {"frame_file": str(frame), "width": width, "height": height},
+            "overlay": True,
+        })
+
     def make_tracker(self, source=None, **settings):
         """Adds a face_tracker_ptz filter to a source, a new one if none is
         given. It has to be an asynchronous video source, as the filter is."""
