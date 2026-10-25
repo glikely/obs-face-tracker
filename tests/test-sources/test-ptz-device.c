@@ -8,6 +8,10 @@
  *   api_major, api_minor   the API version it reports
  *   zoom       a position in [0, 1], announced with ptz_state_changed, and
  *              given by ptz_get_state, which any thread may call
+ *   list_file  when it changes, write to it a line for each PTZ device of the
+ *              API that OBS has, a source or a filter: its name, UUID and
+ *              version, separated by tabs. A test cannot get a filter's UUID
+ *              from obs-websocket.
  */
 
 #include <obs-module.h>
@@ -99,6 +103,43 @@ static void emit_zoom(struct test_ptz_device *d)
 	obs_data_release(changed);
 }
 
+struct list_ctx
+{
+	FILE *f;
+};
+
+static void list_device(struct list_ctx *ctx, obs_source_t *source)
+{
+	proc_handler_t *ph = obs_source_get_proc_handler(source);
+	calldata_t cd = {0};
+	if (ph && proc_handler_call(ph, "ptz_get_api_version", &cd))
+		fprintf(ctx->f, "%s\t%s\t%lld.%lld\n", obs_source_get_name(source), obs_source_get_uuid(source),
+			calldata_int(&cd, "major"), calldata_int(&cd, "minor"));
+	calldata_free(&cd);
+}
+
+static void list_filter(obs_source_t *parent, obs_source_t *filter, void *param)
+{
+	UNUSED_PARAMETER(parent);
+	list_device(param, filter);
+}
+
+static bool list_source(void *param, obs_source_t *source)
+{
+	list_device(param, source);
+	obs_source_enum_filters(source, list_filter, param);
+	return true;
+}
+
+static void write_device_list(const char *path)
+{
+	struct list_ctx ctx = {fopen(path, "w")};
+	if (!ctx.f)
+		return;
+	obs_enum_sources(list_source, &ctx);
+	fclose(ctx.f);
+}
+
 static void test_ptz_device_update(void *data, obs_data_t *settings)
 {
 	struct test_ptz_device *d = data;
@@ -109,6 +150,10 @@ static void test_ptz_device_update(void *data, obs_data_t *settings)
 	d->api_major = obs_data_get_int(settings, "api_major");
 	d->api_minor = obs_data_get_int(settings, "api_minor");
 	pthread_mutex_unlock(&d->mutex);
+
+	const char *list_file = obs_data_get_string(settings, "list_file");
+	if (*list_file)
+		write_device_list(list_file);
 
 	double zoom = obs_data_get_double(settings, "zoom");
 	pthread_mutex_lock(&d->mutex);

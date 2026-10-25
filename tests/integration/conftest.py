@@ -19,6 +19,8 @@ Environment:
   FACE_TRACKER_OBS_BINARY  the OBS to run, else OBS.app or `obs`. On Windows,
                        which has to have it, the obs64.exe of an OBS that is
                        for testing.
+  OBS_PTZ_PLUGIN       the obs-ptz.plugin of obs-ptz, to test against it: the
+                       tests that need it are skipped without it.
   FACE_TRACKER_DATA    a data directory with the face detector's model, as
                        ci/download-dlib-models.sh makes (dlib_hog_model/...).
                        The tests that need a face are skipped without it.
@@ -209,6 +211,16 @@ def write_face_frame(path, center, face_height=0.55):
     return FRAME_SIZE
 
 
+def install_obs_ptz(home: Path):
+    """Puts obs-ptz, which the tests of the real device API need, beside it."""
+    bundle = os.environ.get("OBS_PTZ_PLUGIN")
+    if not bundle or platform.system() != "Darwin":
+        return
+    plugins = obs_config_root(home) / "plugins"
+    plugins.mkdir(parents=True, exist_ok=True)
+    (plugins / Path(bundle).name).symlink_to(Path(bundle).resolve())
+
+
 def install_module(plugins: Path, path: Path, name, data=None):
     """Puts the plugin at path in plugins, the folder OBS looks for one in, as
     name, with the data directory data if it has one. On Windows plugins is the
@@ -256,6 +268,7 @@ def install_module(plugins: Path, path: Path, name, data=None):
 def install_plugin(home: Path, env):
     """Puts the plugin under test, and the plugin of test sources, where OBS
     looks for one."""
+    install_obs_ptz(home)
     plugins = home if IS_WINDOWS else obs_config_root(home) / "plugins"
     for var, name, data in (("FACE_TRACKER_PLUGIN", PLUGIN_NAME, install_data),
                             ("FACE_TRACKER_TEST_SOURCES", TEST_SOURCES_NAME, None)):
@@ -402,6 +415,10 @@ class World:
         self.counter = 0
         self.scenes = []
 
+    def log_lines(self):
+        """What OBS has logged so far, as lines"""
+        return self.obs_log.read_text(errors="replace").splitlines()
+
     def screenshot(self, source, size=FRAME_SIZE):
         """What a source shows, with its filters, as an RGB image"""
         import base64
@@ -539,6 +556,7 @@ def obs_world(tmp_path_factory):
     # Windows OBS looks for what it needs from the folder it is started in,
     # and logs to its profile, not its output
     with output_log("obs") as out:
+        log_path = out.log_path
         print(f"OBS log: {obs_config_root(home) / 'logs' if IS_WINDOWS else out.log_path}")
         proc = subprocess.Popen([obs_binary, "--disable-updater"], cwd=Path(obs_binary).parent if IS_WINDOWS else home,
                                 env=env, stdout=out, stderr=subprocess.STDOUT,
@@ -577,7 +595,9 @@ def obs_world(tmp_path_factory):
                                "did OBS load its plugin of test sources (see FACE_TRACKER_TEST_SOURCES), "
                                "and is the OBS no older than the one the build is for?")
 
-        yield World(ws, tmp_path_factory.mktemp("logs"))
+        world = World(ws, tmp_path_factory.mktemp("logs"))
+        world.obs_log = Path(log_path)
+        yield world
     finally:
         if ws is not None:
             ws.close()

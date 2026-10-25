@@ -27,6 +27,14 @@ It also covers zoom out for a face that is larger than the tracker's target and 
 and the preset recalled when the face is lost, which is not when it is disabled.
 It does not yet cover the size of the moves, or several faces.
 
+`test_obs_ptz.py` covers the same against obs-ptz itself, with obs-ptz's camera simulator `ptzsim` behind it,
+as the test device only models the API as this repository reads it:
+each direction of pan, tilt and zoom reaches the simulated camera with the sign the camera has,
+the camera is stopped when the tracker goes, a face that is lost sends the camera to a preset it was saved in,
+and a camera that was zoomed in before the tracker found it is known to be.
+These tests are skipped without `OBS_PTZ_PLUGIN` and `OBS_PTZ_REPO`.
+The obs-ptz they load has to have version 0.7 of the PTZ API or later, as the tracker needs.
+
 The tests that need a face are skipped without `FACE_TRACKER_DATA`, the face detector's model.
 
 ## How it works
@@ -100,6 +108,8 @@ These can be set to choose others:
 | `FACE_TRACKER_PLUGIN` | The plugin to test: the `.plugin` bundle on macOS, the `.so` on Linux, the `.dll` on Windows |
 | `FACE_TRACKER_TEST_SOURCES` | The plugin of test sources, as `FACE_TRACKER_PLUGIN` |
 | `FACE_TRACKER_OBS_BINARY` | The OBS to run; on Windows, which has to have it, the `obs64.exe` of a portable OBS for testing |
+| `OBS_PTZ_PLUGIN` | obs-ptz's `.plugin` bundle, to load beside the tracker (macOS only so far), for `test_obs_ptz.py` |
+| `OBS_PTZ_REPO` | A checkout of obs-ptz, for its `scripts/ptzsim`, for `test_obs_ptz.py` |
 | `FACE_TRACKER_DATA` | A data directory with the detector's model, as `ci/download-dlib-models.sh` makes, for the tests that need a face |
 
 OBS may already be running on macOS, but a second one asks whether to start anyway, which nothing answers,
