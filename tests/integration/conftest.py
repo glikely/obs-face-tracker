@@ -3,9 +3,10 @@ checkout, and drive it over obs-websocket for the whole test session.
 
 The build has to be made with -DENABLE_TESTS=ON, which adds a plugin of test
 sources (tests/test-sources), loaded beside the face tracker: the test video
-source (tests/test-sources/test-video-source.c).
-Tests show a face with it, put the face tracker's filters on it, and read what
-they do from a screenshot of it.
+source (test-video-source.c) and the test PTZ device (test-ptz-device.c).
+Tests show a face with the one, put the face tracker's filters on it, and read
+what they do from a screenshot, or from the device's log what the PTZ tracker
+asked of it.
 OBS gets a throwaway profile, so a run does not read or change your own. On
 Windows that is the profile of a portable OBS kept for testing, which each run
 replaces.
@@ -51,6 +52,7 @@ IS_WINDOWS = platform.system() == "Windows"
 
 PLUGIN_NAME = "obs-face-tracker"
 TEST_SOURCES_NAME = "face-tracker-test-sources"
+TEST_DEVICE_KIND = "face_tracker_test_ptz_device"
 TRACKER_KIND = "face_tracker_ptz"
 VIDEO_SOURCE_KIND = "face_tracker_test_video_source"
 
@@ -342,6 +344,35 @@ def wait_for(predicate, timeout=5, interval=0.1):
     raise AssertionError("condition never became true")
 
 
+class PtzDevice:
+    """A face_tracker_test_ptz_device, and what it was asked to do."""
+
+    def __init__(self, world, name, log_file, uuid):
+        self.world = world
+        self.name = name
+        self.log_file = log_file
+        self.uuid = uuid
+
+    def log(self):
+        """What the device was asked to do, a line each, in order"""
+        try:
+            return self.log_file.read_text().splitlines()
+        except FileNotFoundError:
+            return []
+
+    def calls(self, what):
+        return [line for line in self.log() if line.split()[0] == what]
+
+    def wait_for_call(self, what, timeout=5):
+        wait_for(lambda: self.calls(what), timeout=timeout)
+
+    def configure(self, **settings):
+        self.world.ws.call("SetInputSettings", {"inputName": self.name, "inputSettings": settings, "overlay": True})
+
+    def remove(self):
+        self.world.ws.call("RemoveInput", {"inputName": self.name})
+
+
 class Tracker:
     """A face_tracker_ptz filter on a source."""
 
@@ -402,6 +433,26 @@ class World:
             "sceneItemEnabled": True,
         })
         return res["inputUuid"]
+
+    def make_device(self, **settings):
+        """Makes a test PTZ device, with these settings as well as the log's"""
+        name = self.unique("test-ptz-device")
+        log_file = self.tmp / f"{name}.log"
+        uuid = self.create_input(TEST_DEVICE_KIND, name, {"log_file": str(log_file), **settings})
+        return PtzDevice(self, name, log_file, uuid)
+
+    def track_device(self, device, **settings):
+        """Makes a tracker for a device, and waits for it to ask the device its
+        version, which is when it has found it.
+        obs-ptz, if it is loaded, asks each source it sees as it is made, so
+        the device has been asked before, and its first answer does not say
+        that the tracker has. A filter's settings are applied at the next
+        video frame, not as it is made."""
+        time.sleep(0.5)
+        asked = len(device.calls("version_query"))
+        tracker = self.make_tracker(**{"ptz-device": device.uuid, **settings})
+        wait_for(lambda: len(device.calls("version_query")) > asked, timeout=10)
+        return tracker
 
     def make_face_source(self, center=(0.5, 0.5), face_height=0.55):
         """Makes a video source showing a face, in a scene that is made the

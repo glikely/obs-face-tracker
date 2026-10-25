@@ -15,23 +15,33 @@ Change it there first and copy it back, so that it stays the same in all of them
 the Face Tracker filter framing a face that is off the middle,
 and the Face Tracker PTZ filter drawing its markers on it.
 
+`test_ptz_device.py` covers how a `face_tracker_ptz` filter finds and drives a PTZ device
+of the PTZ device API (`docs/ptz-device-api.md` of obs-ptz), in `src/ptz-controller.cpp`:
+it finds the device by the UUID of its source, checks its API version, stops it when the filter goes
+or another device is selected, and copes with a device that is gone or is not one.
+
 The tests that need a face are skipped without `FACE_TRACKER_DATA`, the face detector's model.
 
 ## How it works
 
 1. The build is made with `-DENABLE_TESTS=ON`, which adds a plugin of test sources, `face-tracker-test-sources` (`tests/test-sources`),
    which the tests load beside the face tracker, so that the face tracker is the same as the one released.
+   It has two sources.
    `face_tracker_test_video_source` (`test-video-source.c`) is a source for the tracker to be a filter of:
    the tracker is an asynchronous video filter, which OBS puts only on an asynchronous source, and no source OBS has
    that is one can be made without a camera.
    It shows the raw BGRA frame in its `frame_file` setting, which the tests make from a photo
    of a face from dlib's examples (the `dlib` submodule), placed where a test wants it.
+   `face_tracker_test_ptz_device` (`test-ptz-device.c`) implements the procs and signal of the PTZ device API
+   that the tracker uses, and appends what it is asked to do (`version_query`, `move`, `stop`, `preset_recall`)
+   to the file in its `log_file` setting.
+   Its `api_major` and `api_minor` settings change the version it reports, and `zoom` makes it announce a position.
 2. OBS is started with a throwaway profile, in a temporary home, so it does not read or change yours.
    On Windows it is the profile of a portable OBS kept for the tests, which each run replaces.
    obs-websocket is enabled in that profile.
    Without a display, on Linux, an `Xvfb` is started for it.
 3. A test makes sources, and filters on them, through obs-websocket (`World` in `conftest.py`),
-   and reads what they did from a screenshot of a source.
+   and reads what they did: a screenshot of a source, or a test device's log.
    The scenes and sources it made are removed after each test.
 
 ## Running
