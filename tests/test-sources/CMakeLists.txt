@@ -1,5 +1,6 @@
 # face-tracker-test-sources: the sources that tests/integration puts the
-# face tracker's filters on. See tests/integration/README.md.
+# face tracker's filters on, and the PTZ device they drive. See
+# tests/integration/README.md.
 #
 # A plugin of its own, and not the face tracker's, so that the plugin that is
 # tested is the one that is released. It uses nothing of the face tracker's
@@ -8,6 +9,7 @@
 add_library(face-tracker-test-sources MODULE
 	test-sources.c
 	test-video-source.c
+	test-ptz-device.c
 )
 
 target_link_libraries(face-tracker-test-sources PRIVATE OBS::libobs)

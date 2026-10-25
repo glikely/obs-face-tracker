@@ -8,9 +8,11 @@
 OBS_DECLARE_MODULE()
 
 void register_test_video_source(void);
+void register_test_ptz_device(void);
 
 bool obs_module_load(void)
 {
 	register_test_video_source();
+	register_test_ptz_device();
 	return true;
 }
