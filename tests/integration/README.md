@@ -20,6 +20,11 @@ of the PTZ device API (`docs/ptz-device-api.md` of obs-ptz), in `src/ptz-control
 it finds the device by the UUID of its source, checks its API version, stops it when the filter goes
 or another device is selected, and copes with a device that is gone or is not one.
 
+`test_tracking.py` covers the direction of the control loop, from a face to a move of the device:
+a face to the right of where the tracker holds it is followed to the right, one to the left to the left,
+one above up and one below down.
+It does not yet cover zoom, the preset recalled when the face is lost, the size of the moves, or several faces.
+
 The tests that need a face are skipped without `FACE_TRACKER_DATA`, the face detector's model.
 
 ## How it works
