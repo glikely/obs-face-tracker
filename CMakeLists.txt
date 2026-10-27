@@ -48,6 +48,11 @@ if (WITH_DLIB_SUBMODULE)
 	set(DLIB_WEBP_SUPPORT OFF)
 	set(DLIB_JXL_SUPPORT OFF)
 	set(DLIB_TEST_COMPILE_ALL_SOURCE_CPP OFF)
+	if (MSVC AND CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "ARM64")
+		# dlib turns SSE2 on for any processor with Visual Studio. A cache
+		# entry, as its option() does not see a variable
+		set(USE_SSE2_INSTRUCTIONS OFF CACHE BOOL "Compile your program with SSE2 instructions")
+	endif()
 	add_subdirectory(dlib)
 else()
 	find_package(dlib REQUIRED)
@@ -110,7 +115,11 @@ add_library(${CMAKE_PROJECT_NAME} MODULE ${PLUGIN_SOURCES})
 
 if (WITH_DOCK)
 	set(plugin_additional_incs ${plugin_additional_incs} src)
-	set(plugin_additional_libs ${plugin_additional_libs} Qt::Gui Qt::Widgets Qt::GuiPrivate)
+	set(plugin_additional_libs ${plugin_additional_libs} Qt::Gui Qt::Widgets)
+	# Only for Wayland with Qt before 6.9, where it comes with Qt Gui
+	if (OS_LINUX AND Qt${QT_VERSION}Core_VERSION VERSION_LESS 6.9)
+		set(plugin_additional_libs ${plugin_additional_libs} Qt::GuiPrivate)
+	endif()
 endif()
 
 include_directories(
